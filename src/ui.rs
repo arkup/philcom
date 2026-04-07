@@ -557,8 +557,9 @@ fn render_panel(f: &mut Frame, panel: &Panel, area: Rect, active: bool, theme: &
         let mut offset: u16 = 0;
         // Build prefix paths segment by segment
         let mut accumulated = std::path::PathBuf::new();
-        // Split on '/' — each segment click navigates to that prefix
-        let parts: Vec<&str> = path_str.split('/').collect();
+        // Split on the OS path separator — each segment click navigates to that prefix
+        let sep = std::path::MAIN_SEPARATOR;
+        let parts: Vec<&str> = path_str.split(sep).collect();
         for (i, part) in parts.iter().enumerate() {
             if i == 0 && part.is_empty() {
                 // Unix root: the '/' separator itself
@@ -566,13 +567,22 @@ fn render_panel(f: &mut Frame, panel: &Panel, area: Rect, active: bool, theme: &
                 let rect = Rect::new(base_x + offset, area.y, 1, 1);
                 rects.push((rect, accumulated.clone()));
                 offset += 1;
+            } else if i == 0 && part.ends_with(':') {
+                // Windows drive root e.g. "C:" — include trailing separator so
+                // PathBuf is absolute (C:\) and further push() calls work correctly
+                accumulated = std::path::PathBuf::from(format!("{}{}", part, sep));
+                let w = part.chars().count() as u16;
+                let rect = Rect::new(base_x + offset, area.y, w, 1);
+                rects.push((rect, accumulated.clone()));
+                offset += w;
+                if i + 1 < parts.len() { offset += 1; }
             } else if !part.is_empty() {
                 accumulated.push(part);
                 let w = part.chars().count() as u16;
                 let rect = Rect::new(base_x + offset, area.y, w, 1);
                 rects.push((rect, accumulated.clone()));
                 offset += w;
-                // skip the '/' separator that follows (if not last)
+                // skip the separator that follows (if not last)
                 if i + 1 < parts.len() { offset += 1; }
             }
         }

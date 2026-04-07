@@ -22,7 +22,7 @@ A lightweight terminal file manager inspired by Midnight Commander, Total Comman
 ## Installation
 
 ```bash
-git clone https://github.com/arkup/philcom
+git clone https://github.com/arkup/philcom.git
 cd philcom
 cargo build --release
 ./target/release/philcom
