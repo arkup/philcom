@@ -1,0 +1,20 @@
+[package]
+name = "philcom"
+version = "0.1.0"
+edition = "2021"
+description = "A lightweight two-panel terminal file manager inspired by Midnight Commander / Total Commander"
+license = "MIT"
+
+[[bin]]
+name = "philcom"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"
+dirs = "5"
+arboard = "3"
+sha2 = "0.10"
