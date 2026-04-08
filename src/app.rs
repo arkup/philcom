@@ -1926,8 +1926,21 @@ impl App {
         disable_raw_mode()?;
         execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
-        let _ = std::process::Command::new(&shell).status();
+        println!("\x1b[33m");
+        println!(r"  ____  _     _ _");
+        println!(r" |  _ \| |__ (_) | ___ ___  _ __ ___");
+        println!(r" | |_) | '_ \| | |/ __/ _ \| '_ ` _ \");
+        println!(r" |  __/| | | | | | (_| (_) | | | | | |");
+        println!(r" |_|   |_| |_|_|_|\___\___/|_| |_| |_|");
+        println!("\x1b[0m  Type \x1b[1mexit\x1b[0m to return.\n");
+
+        #[cfg(windows)]
+        let _ = std::process::Command::new("cmd").status();
+        #[cfg(not(windows))]
+        {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+            let _ = std::process::Command::new(&shell).status();
+        }
 
         enable_raw_mode()?;
         execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
