@@ -1533,14 +1533,14 @@ fn render_history_popup(f: &mut Frame, app: &mut App, theme: &Theme) {
 // ── Bookmark popup ────────────────────────────────────────────────────────────
 
 fn render_bookmark_popup(f: &mut Frame, app: &mut App, theme: &Theme) {
-    let (entries, selected, scroll) = match &app.bookmark_popup {
-        Some(p) => (p.entries.clone(), p.selected, p.scroll),
+    let (entries, selected, scroll, target_panel) = match &app.bookmark_popup {
+        Some(p) => (p.entries.clone(), p.selected, p.scroll, p.target_panel.clone()),
         None => return,
     };
 
     let max_visible: usize = 15;
     let visible = entries.len().min(max_visible);
-    let popup_h = visible as u16 + 3;
+    let popup_h = visible as u16 + 4; // +1 for tab bar row
     let popup_w: u16 = 66;
     let area = f.area();
     let rect = centered_rect(popup_w, popup_h, area);
@@ -1556,7 +1556,7 @@ fn render_bookmark_popup(f: &mut Frame, app: &mut App, theme: &Theme) {
         .borders(Borders::ALL)
         .title(Span::styled(" Bookmarks ", Style::default().fg(theme.panel_title)))
         .title_bottom(Span::styled(
-            " Enter navigate  \u{2502}  Del remove  \u{2502}  Esc close ",
+            " Enter/DblClick  \u{2502}  Tab switch panel  \u{2502}  Del remove  \u{2502}  Esc close ",
             Style::default().fg(theme.panel_fg).bg(theme.panel_bg),
         ))
         .border_style(Style::default().fg(theme.panel_border))
@@ -1565,6 +1565,23 @@ fn render_bookmark_popup(f: &mut Frame, app: &mut App, theme: &Theme) {
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
+    // Split inner into tab bar (1 row) + list
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    // Tab bar: Left / Right toggle
+    let left_style  = if target_panel == PanelSide::Left  { theme.selected_style() } else { theme.panel_style() };
+    let right_style = if target_panel == PanelSide::Right { theme.selected_style() } else { theme.panel_style() };
+    let tab_line = Line::from(vec![
+        Span::styled(" Left ",  left_style),
+        Span::styled(" \u{2502} ", Style::default().fg(theme.panel_border)),
+        Span::styled(" Right ", right_style),
+    ]);
+    f.render_widget(Paragraph::new(tab_line), chunks[0]);
+
+    // Bookmark list
     let items: Vec<ListItem> = entries.iter()
         .enumerate()
         .skip(scroll)
@@ -1577,7 +1594,7 @@ fn render_bookmark_popup(f: &mut Frame, app: &mut App, theme: &Theme) {
         })
         .collect();
 
-    f.render_widget(List::new(items), inner);
+    f.render_widget(List::new(items), chunks[1]);
 
     if let Some(p) = &mut app.bookmark_popup {
         p.rect = rect;

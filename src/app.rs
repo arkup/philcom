@@ -112,6 +112,7 @@ pub struct BookmarkPopup {
     pub selected: usize,
     pub scroll: usize,
     pub rect: Rect,
+    pub target_panel: PanelSide,
 }
 
 pub struct ViewerState {
@@ -1226,6 +1227,43 @@ impl App {
                     }
                     return;
                 }
+                // Bookmark popup
+                if self.bookmark_popup.is_some() {
+                    let rect = self.bookmark_popup.as_ref().unwrap().rect;
+                    if rect_contains(rect, col, row) {
+                        // Tab bar row (first inner row after border)
+                        // Layout: inner starts at rect.x+1
+                        //   " Left "  = cols inner+0..+5  (6 chars)
+                        //   " │ "     = cols inner+6..+8  (3 chars)
+                        //   " Right " = cols inner+9..+15 (7 chars)
+                        if row == rect.y + 1 {
+                            let inner_x = rect.x + 1;
+                            if let Some(p) = &mut self.bookmark_popup {
+                                if col >= inner_x && col < inner_x + 6 {
+                                    p.target_panel = PanelSide::Left;
+                                } else if col >= inner_x + 9 && col < inner_x + 16 {
+                                    p.target_panel = PanelSide::Right;
+                                }
+                            }
+                        } else {
+                            // List area starts at row rect.y + 2 (border + tab row)
+                            let inner_row = row.saturating_sub(rect.y + 2) as usize;
+                            let scroll = self.bookmark_popup.as_ref().unwrap().scroll;
+                            let idx = scroll + inner_row;
+                            let len = self.bookmark_popup.as_ref().unwrap().entries.len();
+                            if idx < len {
+                                let is_double = self.is_double_click(col, row);
+                                if let Some(p) = &mut self.bookmark_popup { p.selected = idx; }
+                                if is_double {
+                                    self.navigate_to_bookmark();
+                                }
+                            }
+                        }
+                    } else {
+                        self.bookmark_popup = None;
+                    }
+                    return;
+                }
                 // File submenu
                 if self.file_submenu_open {
                     if rect_contains(self.file_submenu_rect, col, row) {
@@ -2084,6 +2122,7 @@ impl App {
         self.bookmark_popup = Some(BookmarkPopup {
             entries,
             selected: 0,
+            target_panel: self.active_panel.clone(),
             scroll: 0,
             rect: Rect::default(),
         });
@@ -2104,6 +2143,14 @@ impl App {
                     if p.selected + 1 < len { p.selected += 1; }
                 }
             }
+            KeyCode::Tab => {
+                if let Some(p) = &mut self.bookmark_popup {
+                    p.target_panel = match p.target_panel {
+                        PanelSide::Left  => PanelSide::Right,
+                        PanelSide::Right => PanelSide::Left,
+                    };
+                }
+            }
             KeyCode::Delete => { self.remove_selected_bookmark(); }
             KeyCode::Enter  => { self.navigate_to_bookmark(); }
             _ => {}
@@ -2111,12 +2158,12 @@ impl App {
     }
 
     fn navigate_to_bookmark(&mut self) {
-        let path_str = match self.bookmark_popup.take() {
-            Some(p) => p.entries.into_iter().nth(p.selected),
+        let (path_str, target) = match self.bookmark_popup.take() {
+            Some(p) => (p.entries.into_iter().nth(p.selected), p.target_panel),
             None => return,
         };
         if let Some(s) = path_str {
-            let panel = match self.active_panel {
+            let panel = match target {
                 PanelSide::Left  => &mut self.left_panel,
                 PanelSide::Right => &mut self.right_panel,
             };
