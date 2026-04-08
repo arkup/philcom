@@ -497,11 +497,19 @@ impl App {
                 } else if !self.command_line.is_empty() {
                     let cmd = self.command_line.clone();
                     self.command_line.clear();
-                    match cmd.trim() {
+                    let trimmed = cmd.trim();
+                    match trimmed {
                         "q" | "quit" | "exit" => self.running = false,
                         "cd" => self.execute_cd(""),
-                        _ if cmd.trim_start().starts_with("cd ") => {
-                            self.execute_cd(cmd.trim_start()["cd ".len()..].trim());
+                        _ if trimmed.starts_with("cd ") => {
+                            self.execute_cd(trimmed["cd ".len()..].trim());
+                        }
+                        // Windows drive switch: "c:", "d:", etc.
+                        _ if trimmed.len() == 2
+                            && trimmed.as_bytes()[1] == b':'
+                            && trimmed.as_bytes()[0].is_ascii_alphabetic() =>
+                        {
+                            self.execute_cd(&format!("{}\\", trimmed));
                         }
                         _ => self.pending_command = Some(cmd),
                     }
@@ -1896,14 +1904,27 @@ impl App {
         disable_raw_mode()?;
         execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
 
+        #[cfg(windows)]
+        let _ = std::process::Command::new("cmd").args(["/C", cmd]).status();
+        #[cfg(not(windows))]
         let _ = std::process::Command::new("sh").arg("-c").arg(cmd).status();
 
         print!("\n\x1b[33m[philcom]\x1b[0m Press Enter to return...");
         io::stdout().flush()?;
-        let mut buf = String::new();
-        io::stdin().read_line(&mut buf)?;
 
+        // Re-enable raw mode to reliably capture keypress on all platforms
+        // (io::stdin().read_line() is unreliable on Windows after crossterm raw mode changes)
         enable_raw_mode()?;
+        loop {
+            if let Ok(Event::Key(key)) = event::read() {
+                if key.kind == KeyEventKind::Press
+                    && matches!(key.code, KeyCode::Enter | KeyCode::Esc)
+                {
+                    break;
+                }
+            }
+        }
+
         execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
         terminal.clear()?;
 

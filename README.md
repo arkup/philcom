@@ -134,19 +134,6 @@ Tabs can also be managed via the **Left / Right** panel menu. Click a tab label 
 | `Alt+L` | Operation log popup |
 | `F10` / `Ctrl+C` | Quit |
 
-### Mouse
-
-| Action | Result |
-|--------|--------|
-| Click panel item | Switch panel + move selection |
-| Double-click item | Open directory (same as Enter) |
-| Right-click item | Context menu (Copy path, Delete, …) |
-| Click tab label | Switch to that tab |
-| Scroll wheel | Scroll active panel / viewer / editor |
-| Click + drag in viewer | Select text |
-| Click menu bar | Open menu |
-| Click bottom button | Trigger button action |
-
 ## Configuration
 
 Config is stored at `~/.config/philcom/config.toml` and is created automatically on first run with defaults.
