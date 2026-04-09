@@ -60,6 +60,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
         render_search_dialog(f, app, &theme, area);
     }
 
+    // Stop-search confirmation overlay
+    if app.search_stop_confirm {
+        let theme = app.theme.clone();
+        render_search_stop_dialog(f, app, area, &theme);
+    }
+
     // Dialog overlay (rendered on top)
     if app.dialog.is_some() {
         let theme = app.theme.clone();
@@ -1329,9 +1335,15 @@ fn render_search_dialog(f: &mut Frame, app: &mut App, theme: &Theme, area: Rect)
 // ── Search results panel ──────────────────────────────────────────────────────
 
 fn render_search_results_panel(f: &mut Frame, app: &mut App, area: Rect, active: bool, theme: &Theme) {
-    let (results_len, selected, scroll, running, summary) = match &app.search_results {
-        Some(sr) => (sr.results.len(), sr.selected, sr.scroll, sr.running, sr.summary.clone()),
+    let (results_len, selected, scroll, running, summary, anim_tick) = match &app.search_results {
+        Some(sr) => (sr.results.len(), sr.selected, sr.scroll, sr.running, sr.summary.clone(), sr.anim_tick),
         None => return,
+    };
+
+    let hint = if running {
+        " Enter/F3 view  \u{2502}  Space mark  \u{2502}  p print  \u{2502}  Esc stop "
+    } else {
+        " Enter/F3 view  \u{2502}  F5 copy  \u{2502}  Space mark  \u{2502}  p print  \u{2502}  Esc close "
     };
 
     let status = if running {
@@ -1345,7 +1357,7 @@ fn render_search_results_panel(f: &mut Frame, app: &mut App, area: Rect, active:
         .borders(Borders::ALL)
         .title(Span::styled(status, Style::default().fg(theme.panel_title)))
         .title_bottom(Span::styled(
-            " Enter/F3 view  \u{2502}  F5 copy  \u{2502}  Space mark  \u{2502}  Esc close ",
+            hint,
             Style::default().fg(theme.panel_fg).bg(theme.panel_bg),
         ))
         .border_style(border_style)
@@ -1354,7 +1366,16 @@ fn render_search_results_panel(f: &mut Frame, app: &mut App, area: Rect, active:
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let height = inner.height as usize;
+    // Split inner: when running, reserve bottom row for progress bar
+    let (list_area, bar_area) = if running && inner.height >= 2 {
+        let la = Rect::new(inner.x, inner.y, inner.width, inner.height - 1);
+        let ba = Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1);
+        (la, Some(ba))
+    } else {
+        (inner, None)
+    };
+
+    let height = list_area.height as usize;
 
     // Adjust scroll
     let mut scroll = scroll;
@@ -1364,48 +1385,128 @@ fn render_search_results_panel(f: &mut Frame, app: &mut App, area: Rect, active:
 
     if results_len == 0 {
         let msg = if running { "  Searching…" } else { "  No results." };
-        f.render_widget(Paragraph::new(msg).style(theme.panel_style()), inner);
-        return;
+        f.render_widget(Paragraph::new(msg).style(theme.panel_style()), list_area);
+    } else {
+        let max_w = list_area.width.saturating_sub(2) as usize;
+        let results = match &app.search_results { Some(sr) => &sr.results as *const Vec<SearchResult>, None => return };
+        let marked: *const std::collections::HashSet<usize> = match &app.search_results { Some(sr) => &sr.marked, None => return };
+        // SAFETY: we only read, no mutation, and borrow ends before next draw
+        let results = unsafe { &*results };
+        let marked  = unsafe { &*marked };
+
+        let items: Vec<ListItem> = results.iter().enumerate()
+            .skip(scroll).take(height)
+            .map(|(i, r)| {
+                let is_sel    = i == selected;
+                let is_marked = marked.contains(&i);
+                let path_str  = r.path.display().to_string();
+                let label = match &r.kind {
+                    SearchResultKind::NameMatch => {
+                        format!(" {} ", truncate(&path_str, max_w))
+                    }
+                    SearchResultKind::TextMatch { line_num, line } => {
+                        let prefix = format!("{}:{} ", path_str, line_num);
+                        let rest   = truncate(line.trim(), max_w.saturating_sub(prefix.len()));
+                        format!(" {}{} ", prefix, rest)
+                    }
+                    SearchResultKind::HexMatch { offset } => {
+                        format!(" {} @ 0x{:X} ", truncate(&path_str, max_w.saturating_sub(14)), offset)
+                    }
+                };
+                let style = if is_sel {
+                    theme.selected_style()
+                } else if is_marked {
+                    Style::default().fg(Color::Yellow).bg(theme.panel_bg)
+                } else {
+                    theme.panel_style()
+                };
+                ListItem::new(label).style(style)
+            })
+            .collect();
+
+        f.render_widget(List::new(items), list_area);
     }
 
-    let max_w = inner.width.saturating_sub(2) as usize;
-    let results = match &app.search_results { Some(sr) => &sr.results as *const Vec<SearchResult>, None => return };
-    let marked: *const std::collections::HashSet<usize> = match &app.search_results { Some(sr) => &sr.marked, None => return };
-    // SAFETY: we only read, no mutation, and borrow ends before next draw
-    let results = unsafe { &*results };
-    let marked  = unsafe { &*marked };
-
-    let items: Vec<ListItem> = results.iter().enumerate()
-        .skip(scroll).take(height)
-        .map(|(i, r)| {
-            let is_sel    = i == selected;
-            let is_marked = marked.contains(&i);
-            let path_str  = r.path.display().to_string();
-            let label = match &r.kind {
-                SearchResultKind::NameMatch => {
-                    format!(" {} ", truncate(&path_str, max_w))
-                }
-                SearchResultKind::TextMatch { line_num, line } => {
-                    let prefix = format!("{}:{} ", path_str, line_num);
-                    let rest   = truncate(line.trim(), max_w.saturating_sub(prefix.len()));
-                    format!(" {}{} ", prefix, rest)
-                }
-                SearchResultKind::HexMatch { offset } => {
-                    format!(" {} @ 0x{:X} ", truncate(&path_str, max_w.saturating_sub(14)), offset)
-                }
-            };
-            let style = if is_sel {
-                theme.selected_style()
-            } else if is_marked {
-                Style::default().fg(Color::Yellow).bg(theme.panel_bg)
+    // Animated indeterminate progress bar
+    if let Some(ba) = bar_area {
+        let bar_w = ba.width.saturating_sub(2) as usize; // 1 space each side
+        if bar_w > 0 {
+            let block_w = (bar_w / 5).max(3).min(bar_w);
+            let span    = bar_w.saturating_sub(block_w);
+            let pos = if span == 0 {
+                0
             } else {
-                theme.panel_style()
+                let t = (anim_tick as usize * 2) % (span * 2);
+                if t > span { span * 2 - t } else { t }
             };
-            ListItem::new(label).style(style)
-        })
-        .collect();
+            let bar_str = format!(
+                " {}{}{} ",
+                " ".repeat(pos),
+                "\u{2588}".repeat(block_w),
+                " ".repeat(span - pos),
+            );
+            f.render_widget(
+                Paragraph::new(bar_str)
+                    .style(Style::default().fg(theme.panel_title).bg(theme.panel_bg)),
+                ba,
+            );
+        }
+    }
+}
 
-    f.render_widget(List::new(items), inner);
+fn render_search_stop_dialog(f: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
+    let results_len = app.search_results.as_ref().map(|s| s.results.len()).unwrap_or(0);
+
+    let popup = centered_rect(42, 7, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(" Stop search? ", Style::default().fg(theme.panel_title)))
+        .border_style(Style::default().fg(theme.panel_border))
+        .style(Style::default().bg(theme.menu_bg).fg(theme.menu_fg));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    // Line 1: result count
+    let count_line = format!("  {} result(s) found so far.", results_len);
+    f.render_widget(
+        Paragraph::new(count_line).style(Style::default().fg(theme.menu_fg).bg(theme.menu_bg)),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+
+    // Line 2: hint
+    f.render_widget(
+        Paragraph::new("  Esc — continue searching")
+            .style(Style::default().fg(theme.panel_fg).bg(theme.menu_bg)),
+        Rect::new(inner.x, inner.y + 1, inner.width, 1),
+    );
+
+    // Line 4: buttons
+    if inner.height >= 4 {
+        let btn_y = inner.y + 3;
+        let keep_label    = "[ Keep results ]";
+        let discard_label = "[ Discard ]";
+        let keep_x    = inner.x + 2;
+        let discard_x = inner.x + 2 + keep_label.len() as u16 + 2;
+
+        let keep_rect    = Rect::new(keep_x,    btn_y, keep_label.len() as u16,    1);
+        let discard_rect = Rect::new(discard_x, btn_y, discard_label.len() as u16, 1);
+
+        f.render_widget(
+            Paragraph::new(keep_label)
+                .style(Style::default().fg(theme.btn_key_fg).bg(theme.btn_key_bg)),
+            keep_rect,
+        );
+        f.render_widget(
+            Paragraph::new(discard_label)
+                .style(Style::default().fg(theme.btn_key_fg).bg(theme.btn_key_bg)),
+            discard_rect,
+        );
+
+        app.search_stop_keep_rect    = keep_rect;
+        app.search_stop_discard_rect = discard_rect;
+    }
 }
 
 fn render_goto_paste_menu(f: &mut Frame, rect: Rect, theme: &Theme) {

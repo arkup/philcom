@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Read as IoRead, Write as IoWrite};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::Duration;
 
 use crate::{config::Config, editor::EditorState, panel::Panel, theme::Theme, ui};
@@ -90,14 +91,16 @@ pub struct SearchResult {
 }
 
 pub struct SearchResultsPanel {
-    pub results:  Vec<SearchResult>,
-    pub marked:   std::collections::HashSet<usize>,
-    pub selected: usize,
-    pub scroll:   usize,
-    pub side:     PanelSide,
-    pub running:  bool,
-    pub rx:       Option<std::sync::mpsc::Receiver<SearchResult>>,
-    pub summary:  String,
+    pub results:   Vec<SearchResult>,
+    pub marked:    std::collections::HashSet<usize>,
+    pub selected:  usize,
+    pub scroll:    usize,
+    pub side:      PanelSide,
+    pub running:   bool,
+    pub rx:        Option<std::sync::mpsc::Receiver<SearchResult>>,
+    pub summary:   String,
+    pub stop_flag: Arc<AtomicBool>,
+    pub anim_tick: u8,
 }
 
 pub struct HistoryPopup {
@@ -189,6 +192,10 @@ pub struct App {
     pub right_tab_rects: Vec<Rect>,
     pub search_dialog: Option<SearchDialog>,
     pub search_results: Option<SearchResultsPanel>,
+    pub search_stop_confirm: bool,
+    pub search_stop_keep_rect: Rect,
+    pub search_stop_discard_rect: Rect,
+    pub pending_print_results: bool,
     pub pending_shell: bool,
 }
 
@@ -249,6 +256,10 @@ impl App {
             right_tab_rects: Vec::new(),
             search_dialog: None,
             search_results: None,
+            search_stop_confirm: false,
+            search_stop_keep_rect: Rect::default(),
+            search_stop_discard_rect: Rect::default(),
+            pending_print_results: false,
             pending_shell: false,
         })
     }
@@ -262,6 +273,10 @@ impl App {
             if self.pending_shell {
                 self.pending_shell = false;
                 self.run_interactive_shell(terminal)?;
+            }
+            if self.pending_print_results {
+                self.pending_print_results = false;
+                self.print_search_results(terminal)?;
             }
 
             // Drain search results from background thread
@@ -278,6 +293,9 @@ impl App {
                             }
                         }
                     }
+                }
+                if sr.running {
+                    sr.anim_tick = sr.anim_tick.wrapping_add(1);
                 }
             }
 
@@ -304,6 +322,17 @@ impl App {
         // Search dialog
         if self.search_dialog.is_some() {
             self.handle_search_dialog_key(key, modifiers);
+            return;
+        }
+
+        // Stop-search confirmation overlay
+        if self.search_stop_confirm {
+            match key {
+                KeyCode::Esc => { self.search_stop_confirm = false; }
+                KeyCode::Enter | KeyCode::Char('k') | KeyCode::Char('K') => { self.stop_search(true); }
+                KeyCode::Char('d') | KeyCode::Char('D') => { self.stop_search(false); }
+                _ => {}
+            }
             return;
         }
 
@@ -914,8 +943,10 @@ impl App {
         let name_c = name.clone();
         let text_c = text.clone();
         let hex_c  = hex.clone();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let stop_c = Arc::clone(&stop_flag);
         std::thread::spawn(move || {
-            search_dir_recursive(&root, &name_c, text_c.as_deref(), hex_c.as_deref(), &tx);
+            search_dir_recursive(&root, &name_c, text_c.as_deref(), hex_c.as_deref(), &tx, &stop_c);
         });
 
         let side = self.active_panel.clone();
@@ -928,13 +959,32 @@ impl App {
             running: true,
             rx: Some(rx),
             summary,
+            stop_flag,
+            anim_tick: 0,
         });
+    }
+
+    fn stop_search(&mut self, keep: bool) {
+        self.search_stop_confirm = false;
+        if let Some(sr) = &self.search_results {
+            sr.stop_flag.store(true, Ordering::Relaxed);
+        }
+        if !keep {
+            self.search_results = None;
+        }
     }
 
     fn handle_search_results_key(&mut self, key: KeyCode) {
         let len = self.search_results.as_ref().map(|s| s.results.len()).unwrap_or(0);
         match key {
-            KeyCode::Esc => { self.search_results = None; }
+            KeyCode::Esc => {
+                let running = self.search_results.as_ref().map(|s| s.running).unwrap_or(false);
+                if running {
+                    self.search_stop_confirm = true;
+                } else {
+                    self.search_results = None;
+                }
+            }
             KeyCode::Up => {
                 if let Some(sr) = &mut self.search_results {
                     if sr.selected > 0 { sr.selected -= 1; }
@@ -966,6 +1016,7 @@ impl App {
             }
             KeyCode::Enter | KeyCode::F(3) => { self.open_search_result(); }
             KeyCode::F(5)  => { self.copy_from_search_results(); }
+            KeyCode::Char('p') | KeyCode::Char('P') => { self.pending_print_results = true; }
             _ => {}
         }
     }
@@ -1146,6 +1197,17 @@ impl App {
 
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                // Stop-search confirmation overlay
+                if self.search_stop_confirm {
+                    if rect_contains(self.search_stop_keep_rect, col, row) {
+                        self.stop_search(true);
+                    } else if rect_contains(self.search_stop_discard_rect, col, row) {
+                        self.stop_search(false);
+                    } else {
+                        self.search_stop_confirm = false;
+                    }
+                    return;
+                }
                 // Search dialog field focus
                 if let Some(d) = &mut self.search_dialog {
                     if rect_contains(d.path_rect, col, row) { d.focused = SearchField::Path;     return; }
@@ -1984,6 +2046,48 @@ impl App {
         Ok(())
     }
 
+    fn print_search_results<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
+        let (results, summary) = match &self.search_results {
+            Some(sr) => (sr.results.iter().map(|r| {
+                let path = r.path.display().to_string();
+                match &r.kind {
+                    SearchResultKind::NameMatch => path,
+                    SearchResultKind::TextMatch { line_num, line } =>
+                        format!("{}:{}: {}", path, line_num, line.trim()),
+                    SearchResultKind::HexMatch { offset } =>
+                        format!("{} @ 0x{:X}", path, offset),
+                }
+            }).collect::<Vec<_>>(), sr.summary.clone()),
+            None => return Ok(()),
+        };
+
+        disable_raw_mode()?;
+        execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+
+        println!("\x1b[33m[philcom]\x1b[0m Search: {}  ({} result(s))\n", summary, results.len());
+        for line in &results {
+            println!("{}", line);
+        }
+
+        print!("\n\x1b[33m[philcom]\x1b[0m Press Enter to return...");
+        io::stdout().flush()?;
+
+        enable_raw_mode()?;
+        loop {
+            if let Ok(Event::Key(key)) = event::read() {
+                if key.kind == KeyEventKind::Press
+                    && matches!(key.code, KeyCode::Enter | KeyCode::Esc)
+                {
+                    break;
+                }
+            }
+        }
+
+        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+        terminal.clear()?;
+        Ok(())
+    }
+
     // ── Panel accessors ──────────────────────────────────────────────────────
 
     pub fn active_panel(&self) -> &Panel {
@@ -2488,14 +2592,16 @@ fn search_dir_recursive(
     find_text: Option<&str>,
     find_hex: Option<&[u8]>,
     tx: &std::sync::mpsc::Sender<SearchResult>,
+    stop: &Arc<AtomicBool>,
 ) {
     let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
     for entry in entries.flatten() {
+        if stop.load(Ordering::Relaxed) { return; }
         let path = entry.path();
         let fname = entry.file_name().to_string_lossy().to_string();
         if path.is_dir() {
             if fname != "." && fname != ".." {
-                search_dir_recursive(&path, name_pattern, find_text, find_hex, tx);
+                search_dir_recursive(&path, name_pattern, find_text, find_hex, tx, stop);
             }
         } else if wildcard_match(name_pattern, &fname) {
             if let Some(text) = find_text {
