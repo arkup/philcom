@@ -41,6 +41,7 @@ pub enum ContextAction {
     GoToFolder(PathBuf),               // navigate active panel to parent dir
     CopyToPanel(PathBuf),              // open copy dialog for this file
     CopyViewerSelection,               // copy selected text/bytes from viewer
+    RevealInFileManager(PathBuf),      // open system file manager and reveal path
 }
 
 pub struct ContextMenu {
@@ -2343,6 +2344,7 @@ impl App {
             let panel = self.active_panel();
             panel.tab().path.clone()
         };
+        let reveal_path = path.clone();
         let mut items = vec![
             ("Copy path".to_string(),     ContextAction::CopyPath(path.clone())),
             ("Copy filename".to_string(), ContextAction::CopyFilename(path)),
@@ -2360,6 +2362,7 @@ impl App {
             items.push(("SHA-256".to_string(), ContextAction::CalcSha256(p)));
         }
         items.push(("New file".to_string(), ContextAction::NewFile(panel_dir)));
+        items.push((reveal_in_file_manager_label(), ContextAction::RevealInFileManager(reveal_path)));
         self.context_menu = Some(ContextMenu {
             items,
             selected: 0,
@@ -2476,6 +2479,9 @@ impl App {
             }
             ContextAction::CopyViewerSelection => {
                 self.copy_viewer_selection();
+            }
+            ContextAction::RevealInFileManager(path) => {
+                reveal_in_file_manager(&path);
             }
         }
     }
@@ -2681,6 +2687,50 @@ pub fn build_display_lines(lines: &[String], wrap: bool, width: usize) -> Vec<(u
         out.push((0, true, String::new()));
     }
     out
+}
+
+fn reveal_in_file_manager_label() -> String {
+    #[cfg(target_os = "macos")]
+    return "Reveal in Finder".to_string();
+    #[cfg(target_os = "windows")]
+    return "Show in Explorer".to_string();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    return "Open in file manager".to_string();
+}
+
+fn reveal_in_file_manager(path: &Path) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let arg = format!("/select,{}", path.to_string_lossy());
+        let _ = std::process::Command::new("explorer")
+            .arg(arg)
+            .spawn();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        // Try common file managers that support --select, fall back to xdg-open on parent dir
+        let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+        let path_str = path.to_string_lossy().into_owned();
+        let dir_str  = dir.to_string_lossy().into_owned();
+        let candidates: &[(&str, &[&str])] = &[
+            ("nautilus", &["--select", &path_str]),
+            ("dolphin",  &["--select", &path_str]),
+            ("thunar",   &[&dir_str]),
+        ];
+        for (bin, args) in candidates {
+            if std::process::Command::new(bin).args(*args).spawn().is_ok() {
+                return;
+            }
+        }
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+    }
 }
 
 fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> Result<()> {
