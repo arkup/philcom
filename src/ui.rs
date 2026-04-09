@@ -1900,7 +1900,7 @@ fn render_config_dialog(f: &mut Frame, app: &mut App, theme: &Theme, area: Rect)
 
     // Row 1: theme selector — "  Theme:   [<] name           [>]"
     // offsets: "  Theme:   " = 11, "[<]" = 3, name field = 14, "[>]" = 3
-    let btn_style = Style::default().fg(theme.panel_title).bg(theme.menu_bg);
+    let btn_style = Style::default().fg(theme.panel_fg).bg(theme.menu_bg);
     let theme_line = Line::from(vec![
         Span::raw("  Theme:   "),
         Span::styled("[<]", btn_style),
