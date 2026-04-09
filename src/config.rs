@@ -9,6 +9,8 @@ pub struct Config {
     pub buttons: Vec<Button>,
     #[serde(default)]
     pub bookmarks: Vec<String>,
+    #[serde(default)]
+    pub restore_session: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -24,7 +26,45 @@ impl Default for Config {
             theme: "dark".to_string(),
             buttons: default_buttons(),
             bookmarks: Vec::new(),
+            restore_session: false,
         }
+    }
+}
+
+// ── Session ───────────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct Session {
+    pub left_tabs:    Vec<String>,
+    pub left_active:  usize,
+    pub right_tabs:   Vec<String>,
+    pub right_active: usize,
+    pub active_panel: String,
+}
+
+impl Session {
+    pub fn session_path() -> PathBuf {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        home.join(".config").join("philcom").join("session.toml")
+    }
+
+    pub fn load() -> Option<Self> {
+        let path = Self::session_path();
+        if path.exists() {
+            let content = fs::read_to_string(&path).ok()?;
+            toml::from_str(&content).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let path = Self::session_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, toml::to_string_pretty(self)?)?;
+        Ok(())
     }
 }
 

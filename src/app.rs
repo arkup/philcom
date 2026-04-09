@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::Duration;
 
-use crate::{config::Config, editor::EditorState, panel::Panel, theme::Theme, ui};
+use crate::{config::{Config, Session}, editor::EditorState, panel::Panel, theme::Theme, ui};
 
 pub enum Dialog {
     Mkdir   { input: String },
@@ -50,6 +50,18 @@ pub struct ContextMenu {
     pub x: u16,
     pub y: u16,
     pub rect: Rect,
+}
+
+pub struct ConfigDialog {
+    pub theme_index:      usize,
+    pub restore_session:  bool,
+    // rects for mouse hit-testing (populated during render)
+    pub theme_left_rect:  Rect,
+    pub theme_right_rect: Rect,
+    pub restore_rect:     Rect,
+    pub save_rect:        Rect,
+    pub ok_rect:          Rect,
+    pub cancel_rect:      Rect,
 }
 
 pub struct LogEntry {
@@ -191,6 +203,7 @@ pub struct App {
     pub goto_paste_menu: Option<Rect>,
     pub left_tab_rects: Vec<Rect>,
     pub right_tab_rects: Vec<Rect>,
+    pub config_dialog: Option<ConfigDialog>,
     pub search_dialog: Option<SearchDialog>,
     pub search_results: Option<SearchResultsPanel>,
     pub search_stop_confirm: bool,
@@ -210,10 +223,26 @@ impl App {
     pub fn new(left_dir: &str, right_dir: &str) -> Result<Self> {
         let config = Config::load()?;
         let theme = Theme::by_name(&config.theme);
+
+        let (left_panel, right_panel, active_panel) = if config.restore_session {
+            if let Some(session) = Session::load() {
+                let lp = Panel::new_from_paths(&session.left_tabs, session.left_active)
+                    .unwrap_or_else(|_| Panel::new(left_dir).unwrap_or_else(|_| Panel::new(".").unwrap()));
+                let rp = Panel::new_from_paths(&session.right_tabs, session.right_active)
+                    .unwrap_or_else(|_| Panel::new(right_dir).unwrap_or_else(|_| Panel::new(".").unwrap()));
+                let ap = if session.active_panel == "right" { PanelSide::Right } else { PanelSide::Left };
+                (lp, rp, ap)
+            } else {
+                (Panel::new(left_dir)?, Panel::new(right_dir)?, PanelSide::Left)
+            }
+        } else {
+            (Panel::new(left_dir)?, Panel::new(right_dir)?, PanelSide::Left)
+        };
+
         Ok(Self {
-            left_panel: Panel::new(left_dir)?,
-            right_panel: Panel::new(right_dir)?,
-            active_panel: PanelSide::Left,
+            left_panel,
+            right_panel,
+            active_panel,
             command_line: String::new(),
             theme,
             config,
@@ -255,6 +284,7 @@ impl App {
             goto_paste_menu: None,
             left_tab_rects: Vec::new(),
             right_tab_rects: Vec::new(),
+            config_dialog: None,
             search_dialog: None,
             search_results: None,
             search_stop_confirm: false,
@@ -487,6 +517,7 @@ impl App {
             return;
         }
 
+        if self.config_dialog.is_some()  { self.handle_config_dialog_key(key); return; }
         if self.panel_submenu_open { self.handle_panel_submenu_key(key); return; }
         if self.file_submenu_open  { self.handle_file_submenu_key(key); return; }
         if self.submenu_open       { self.handle_submenu_key(key);      return; }
@@ -793,10 +824,9 @@ impl App {
                         self.panel_submenu_index = if filter_exec { 1 } else { 0 };
                         self.panel_submenu_open = true;
                     }
-                    2 => { // Options (theme) submenu
-                        self.submenu_index = Theme::all_names()
-                            .iter().position(|&n| n == self.config.theme.as_str()).unwrap_or(0);
-                        self.submenu_open = true;
+                    2 => { // Options → configuration dialog
+                        self.open_config_dialog();
+                        self.show_menu = false;
                     }
                     _ => {}
                 }
@@ -1119,6 +1149,8 @@ impl App {
     fn clear_settings(&mut self) {
         let path = Config::config_path();
         let _ = std::fs::remove_file(&path);
+        let session_path = Session::session_path();
+        let _ = std::fs::remove_file(&session_path);
         self.config = Config::default();
         self.theme = Theme::by_name(&self.config.theme);
         let path_str = path.display().to_string();
@@ -1190,6 +1222,59 @@ impl App {
         }
     }
 
+    // ── Configuration dialog ─────────────────────────────────────────────────
+
+    pub fn open_config_dialog(&mut self) {
+        let themes = Theme::all_names();
+        let theme_index = themes.iter().position(|&n| n == self.config.theme.as_str()).unwrap_or(0);
+        self.config_dialog = Some(ConfigDialog {
+            theme_index,
+            restore_session: self.config.restore_session,
+            theme_left_rect:  Rect::default(),
+            theme_right_rect: Rect::default(),
+            restore_rect:     Rect::default(),
+            save_rect:        Rect::default(),
+            ok_rect:          Rect::default(),
+            cancel_rect:      Rect::default(),
+        });
+    }
+
+    fn handle_config_dialog_key(&mut self, key: KeyCode) {
+        let themes = Theme::all_names();
+        let dialog = match self.config_dialog.as_mut() {
+            Some(d) => d,
+            None => return,
+        };
+        match key {
+            KeyCode::Esc => { self.config_dialog = None; }
+            KeyCode::Left  => { if dialog.theme_index > 0 { dialog.theme_index -= 1; } }
+            KeyCode::Right => { if dialog.theme_index + 1 < themes.len() { dialog.theme_index += 1; } }
+            KeyCode::Char(' ') => { dialog.restore_session = !dialog.restore_session; }
+            KeyCode::Enter => { self.apply_config_dialog(); }
+            _ => {}
+        }
+    }
+
+    fn apply_config_dialog(&mut self) {
+        if let Some(dialog) = self.config_dialog.take() {
+            let name = Theme::all_names()[dialog.theme_index].to_string();
+            self.theme = Theme::by_name(&name);
+            self.config.theme = name;
+            self.config.restore_session = dialog.restore_session;
+            let _ = self.config.save();
+        }
+    }
+
+    pub fn build_session(&self) -> Session {
+        Session {
+            left_tabs:    self.left_panel.tabs.iter().map(|t| t.path.to_string_lossy().to_string()).collect(),
+            left_active:  self.left_panel.active_tab,
+            right_tabs:   self.right_panel.tabs.iter().map(|t| t.path.to_string_lossy().to_string()).collect(),
+            right_active: self.right_panel.active_tab,
+            active_panel: if self.active_panel == PanelSide::Left { "left".to_string() } else { "right".to_string() },
+        }
+    }
+
     // ── Mouse handling ───────────────────────────────────────────────────────
 
     fn handle_mouse(&mut self, event: crossterm::event::MouseEvent) {
@@ -1198,6 +1283,41 @@ impl App {
 
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                // Config dialog
+                if self.config_dialog.is_some() {
+                    let (tl, tr, res, sav, ok, can) = {
+                        let d = self.config_dialog.as_ref().unwrap();
+                        (d.theme_left_rect, d.theme_right_rect, d.restore_rect,
+                         d.save_rect, d.ok_rect, d.cancel_rect)
+                    };
+                    let themes = Theme::all_names();
+                    if rect_contains(tl, col, row) {
+                        if let Some(d) = &mut self.config_dialog {
+                            if d.theme_index > 0 { d.theme_index -= 1; }
+                        }
+                    } else if rect_contains(tr, col, row) {
+                        if let Some(d) = &mut self.config_dialog {
+                            if d.theme_index + 1 < themes.len() { d.theme_index += 1; }
+                        }
+                    } else if rect_contains(res, col, row) {
+                        if let Some(d) = &mut self.config_dialog {
+                            d.restore_session = !d.restore_session;
+                        }
+                    } else if rect_contains(sav, col, row) {
+                        let restore = self.config_dialog.as_ref().map(|d| d.restore_session).unwrap_or(false);
+                        if restore {
+                            let session = self.build_session();
+                            if session.save().is_ok() {
+                                self.status_msg = Some(format!("Session saved to: {}", Session::session_path().display()));
+                            }
+                        }
+                    } else if rect_contains(ok, col, row) {
+                        self.apply_config_dialog();
+                    } else if rect_contains(can, col, row) {
+                        self.config_dialog = None;
+                    }
+                    return;
+                }
                 // Stop-search confirmation overlay
                 if self.search_stop_confirm {
                     if rect_contains(self.search_stop_keep_rect, col, row) {
@@ -1401,9 +1521,8 @@ impl App {
                                 self.panel_submenu_open = true;
                             }
                             2 => {
-                                self.submenu_index = Theme::all_names()
-                                    .iter().position(|&n| n == self.config.theme.as_str()).unwrap_or(0);
-                                self.submenu_open = true;
+                                self.open_config_dialog();
+                                self.show_menu = false;
                             }
                             _ => {}
                         }

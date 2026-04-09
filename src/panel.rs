@@ -41,7 +41,7 @@ pub struct TabState {
 }
 
 impl TabState {
-    fn new(path: PathBuf) -> Result<Self> {
+    pub fn new(path: PathBuf) -> Result<Self> {
         let mut t = Self {
             path,
             entries:  Vec::new(),
@@ -253,6 +253,26 @@ impl Panel {
         Ok(Self {
             tabs: vec![TabState::new(path)?],
             active_tab: 0,
+            filter_exec: false,
+        })
+    }
+
+    pub fn new_from_paths(paths: &[String], active: usize) -> Result<Self> {
+        let mut tabs = Vec::new();
+        for p in paths {
+            let path = PathBuf::from(p);
+            if path.exists() {
+                if let Ok(t) = TabState::new(path) {
+                    tabs.push(t);
+                }
+            }
+        }
+        if tabs.is_empty() {
+            return Self::new(".");
+        }
+        Ok(Self {
+            active_tab: active.min(tabs.len() - 1),
+            tabs,
             filter_exec: false,
         })
     }

@@ -108,6 +108,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
         render_goto_paste_menu(f, rect, &theme);
     }
 
+    // Config dialog overlay
+    if app.config_dialog.is_some() {
+        let theme = app.theme.clone();
+        render_config_dialog(f, app, &theme, area);
+    }
+
     // Context menu (topmost overlay)
     if app.context_menu.is_some() {
         render_context_menu(f, app);
@@ -1845,6 +1851,104 @@ fn file_kind_style(kind: &FileKind, theme: &Theme) -> Style {
             FileKind::Source     => Style::default().fg(Color::LightCyan).bg(bg),
             FileKind::Other      => theme.file_style(),
         }
+    }
+}
+
+// ── Configuration dialog ──────────────────────────────────────────────────────
+
+fn render_config_dialog(f: &mut Frame, app: &mut App, theme: &Theme, area: Rect) {
+    // Layout (width=48, height=9):
+    //  row 0: blank
+    //  row 1: Theme:  [<] name         [>]
+    //  row 2: blank
+    //  row 3: [x] Restore session on startup
+    //  row 4: blank
+    //  row 5: [ Save session ]   [  OK  ]  [ Cancel ]
+    //  row 6: blank
+    const W: u16 = 48;
+    const H: u16 = 9;
+    let popup = centered_rect(W, H, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(" Configuration ", Style::default().fg(theme.panel_title)))
+        .border_style(Style::default().fg(theme.panel_title))
+        .style(Style::default().bg(theme.panel_bg).fg(theme.panel_fg));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // 0 blank
+            Constraint::Length(1), // 1 theme
+            Constraint::Length(1), // 2 blank
+            Constraint::Length(1), // 3 restore toggle
+            Constraint::Length(1), // 4 blank
+            Constraint::Length(1), // 5 buttons
+            Constraint::Min(0),    // 6 blank
+        ])
+        .split(inner);
+
+    let (theme_index, restore_session) = {
+        let d = app.config_dialog.as_ref().unwrap();
+        (d.theme_index, d.restore_session)
+    };
+    let themes = crate::theme::Theme::all_names();
+    let theme_name = themes.get(theme_index).copied().unwrap_or("dark");
+
+    // Row 1: theme selector — "  Theme:   [<] name           [>]"
+    // offsets: "  Theme:   " = 11, "[<]" = 3, name field = 14, "[>]" = 3
+    let btn_style = Style::default().fg(theme.panel_title).bg(theme.menu_bg);
+    let theme_line = Line::from(vec![
+        Span::raw("  Theme:   "),
+        Span::styled("[<]", btn_style),
+        Span::styled(format!(" {:<12} ", theme_name), Style::default().bg(theme.panel_bg).fg(theme.panel_fg)),
+        Span::styled("[>]", btn_style),
+    ]);
+    f.render_widget(Paragraph::new(theme_line).style(Style::default().bg(theme.panel_bg)), rows[1]);
+    // [<] at col inner.x+11, width 3; [>] at inner.x+11+3+14=28, width 3
+    let tl = Rect::new(inner.x + 11, rows[1].y, 3, 1);
+    let tr = Rect::new(inner.x + 28, rows[1].y, 3, 1);
+
+    // Row 3: restore toggle
+    let check = if restore_session { "[x]" } else { "[ ]" };
+    let restore_line = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(check, btn_style),
+        Span::raw(" Restore session on startup"),
+    ]);
+    f.render_widget(Paragraph::new(restore_line).style(Style::default().bg(theme.panel_bg)), rows[3]);
+    let res = Rect::new(inner.x + 2, rows[3].y, 3, 1);
+
+    // Row 5: buttons
+    // "  [ Save session ]   [  OK  ]  [ Cancel ]"
+    //   2 + 16            + 3  + 8   + 2 + 10 = 41
+    let save_label   = "[ Save session ]";  // 16
+    let ok_label     = "[  OK  ]";          //  8
+    let cancel_label = "[ Cancel ]";        // 10
+    let btn_line = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(save_label,   btn_style),
+        Span::raw("   "),
+        Span::styled(ok_label,     btn_style),
+        Span::raw("  "),
+        Span::styled(cancel_label, btn_style),
+    ]);
+    f.render_widget(Paragraph::new(btn_line).style(Style::default().bg(theme.panel_bg)), rows[5]);
+    let sav = Rect::new(inner.x + 2,  rows[5].y, 16, 1);
+    let ok  = Rect::new(inner.x + 21, rows[5].y,  8, 1);
+    let can = Rect::new(inner.x + 31, rows[5].y, 10, 1);
+
+    // Store rects back
+    if let Some(d) = app.config_dialog.as_mut() {
+        d.theme_left_rect  = tl;
+        d.theme_right_rect = tr;
+        d.restore_rect     = res;
+        d.save_rect        = sav;
+        d.ok_rect          = ok;
+        d.cancel_rect      = can;
     }
 }
 
