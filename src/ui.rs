@@ -1004,7 +1004,7 @@ fn render_file_submenu(f: &mut Frame, app: &mut App, theme: &Theme) {
     app.file_submenu_rect = rect;
     f.render_widget(Clear, rect);
 
-    let sep_style = Style::default().bg(theme.menu_bg).fg(theme.panel_border);
+    let sep_style = Style::default().bg(theme.menu_bg).fg(theme.menu_sep_fg());
     let sep = ListItem::new(format!(" {:\u{2500}<width$} ", "", width = width as usize - 4)).style(sep_style);
 
     let mut items: Vec<ListItem> = Vec::new();
@@ -1221,7 +1221,7 @@ fn render_panel_submenu(f: &mut Frame, app: &mut App, theme: &Theme) {
     };
 
     let sep = ListItem::new(format!(" {:\u{2500}<width$} ", "", width = width as usize - 4))
-        .style(Style::default().bg(theme.menu_bg).fg(theme.panel_border));
+        .style(Style::default().bg(theme.menu_bg).fg(theme.menu_sep_fg()));
 
     let mut items: Vec<ListItem> = Vec::new();
     for (i, &name) in ALL_ITEMS.iter().enumerate() {

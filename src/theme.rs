@@ -164,4 +164,9 @@ impl Theme {
     pub fn is_light_bg(&self) -> bool {
         matches!(self.panel_bg, Color::White)
     }
+
+    /// Separator color: panel_border unless it matches menu_bg (would be invisible)
+    pub fn menu_sep_fg(&self) -> Color {
+        if self.panel_border == self.menu_bg { self.menu_fg } else { self.panel_border }
+    }
 }
