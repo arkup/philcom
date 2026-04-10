@@ -102,6 +102,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
         render_bookmark_popup(f, app, &theme);
     }
 
+    // Drive list popup
+    if app.drive_list_popup.is_some() {
+        let theme = app.theme.clone();
+        render_drive_list_popup(f, app, &theme);
+    }
+
     // Goto paste menu
     if let Some(rect) = app.goto_paste_menu {
         let theme = app.theme.clone();
@@ -1704,6 +1710,61 @@ fn render_bookmark_popup(f: &mut Frame, app: &mut App, theme: &Theme) {
     f.render_widget(List::new(items), chunks[1]);
 
     if let Some(p) = &mut app.bookmark_popup {
+        p.rect = rect;
+    }
+}
+
+fn render_drive_list_popup(f: &mut Frame, app: &mut App, theme: &Theme) {
+    let popup = match &app.drive_list_popup {
+        Some(p) => p,
+        None => return,
+    };
+
+    let panel_label = if popup.panel == PanelSide::Left { "Left" } else { "Right" };
+    let title = format!(" Change Drive — {} Panel ", panel_label);
+
+    let max_visible: usize = 16;
+    let num = popup.drives.len().min(max_visible);
+    let popup_h = num as u16 + 2; // borders
+    let popup_w: u16 = 50;
+    let area = f.area();
+    let rect = centered_rect(popup_w, popup_h, area);
+
+    f.render_widget(Clear, rect);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(title.as_str(), Style::default().fg(theme.panel_title)))
+        .title_bottom(Span::styled(
+            " Enter navigate  \u{2502}  Esc cancel ",
+            Style::default().fg(theme.panel_fg).bg(theme.panel_bg),
+        ))
+        .border_style(Style::default().fg(theme.panel_border))
+        .style(theme.panel_style());
+
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let selected = popup.selected;
+    let items: Vec<ListItem> = popup.drives.iter()
+        .enumerate()
+        .take(max_visible)
+        .map(|(i, d)| {
+            let label = if d.label.is_empty() {
+                format!(" {} ", d.root)
+            } else {
+                format!(" {}  {} ", d.root, d.label)
+            };
+            let max_w = inner.width.saturating_sub(2) as usize;
+            let label = if label.len() > max_w { label[..max_w].to_string() } else { label };
+            let style = if i == selected { theme.selected_style() } else { theme.panel_style() };
+            ListItem::new(label).style(style)
+        })
+        .collect();
+
+    f.render_widget(List::new(items), inner);
+
+    if let Some(p) = &mut app.drive_list_popup {
         p.rect = rect;
     }
 }

@@ -71,6 +71,18 @@ pub struct LogEntry {
     pub dest: Option<String>,
 }
 
+pub struct DriveEntry {
+    pub root:  String,  // e.g. "C:\" on Windows, "/media/usb" on Linux
+    pub label: String,  // volume label or empty
+}
+
+pub struct DriveListPopup {
+    pub drives:   Vec<DriveEntry>,
+    pub selected: usize,
+    pub panel:    PanelSide,
+    pub rect:     Rect,
+}
+
 pub struct LogPopup {
     pub selected: usize,
     pub scroll: usize,
@@ -196,6 +208,7 @@ pub struct App {
     pub context_menu: Option<ContextMenu>,
     pub history_popup: Option<HistoryPopup>,
     pub bookmark_popup: Option<BookmarkPopup>,
+    pub drive_list_popup: Option<DriveListPopup>,
     pub log_popup: Option<LogPopup>,
     pub op_log: Vec<LogEntry>,
     pub pending_command: Option<String>,
@@ -277,6 +290,7 @@ impl App {
             context_menu: None,
             history_popup: None,
             bookmark_popup: None,
+            drive_list_popup: None,
             log_popup: None,
             op_log: Vec::new(),
             pending_command: None,
@@ -426,6 +440,12 @@ impl App {
         // Bookmark popup
         if self.bookmark_popup.is_some() {
             self.handle_bookmark_popup_key(key);
+            return;
+        }
+
+        // Drive list popup
+        if self.drive_list_popup.is_some() {
+            self.handle_drive_list_popup_key(key);
             return;
         }
 
@@ -609,6 +629,12 @@ impl App {
                 } else {
                     self.active_panel_mut().go_back();
                 }
+            }
+            KeyCode::F(1) if modifiers.contains(KeyModifiers::ALT) => {
+                self.open_drive_list_popup(PanelSide::Left);
+            }
+            KeyCode::F(2) if modifiers.contains(KeyModifiers::ALT) => {
+                self.open_drive_list_popup(PanelSide::Right);
             }
             KeyCode::F(1) => self.open_history_popup(),
             KeyCode::F(2) => self.show_menu = true,
@@ -2437,6 +2463,63 @@ impl App {
         }
     }
 
+    fn open_drive_list_popup(&mut self, panel: PanelSide) {
+        self.context_menu  = None;
+        self.history_popup = None;
+        self.bookmark_popup = None;
+        let drives = list_drives();
+        if drives.is_empty() {
+            self.status_msg = Some("No drives found".to_string());
+            return;
+        }
+        self.drive_list_popup = Some(DriveListPopup {
+            drives,
+            selected: 0,
+            panel,
+            rect: Rect::default(),
+        });
+    }
+
+    fn handle_drive_list_popup_key(&mut self, key: KeyCode) {
+        let len = match &self.drive_list_popup { Some(p) => p.drives.len(), None => return };
+        match key {
+            KeyCode::Esc => { self.drive_list_popup = None; }
+            KeyCode::Up => {
+                if let Some(p) = &mut self.drive_list_popup {
+                    if p.selected > 0 { p.selected -= 1; }
+                }
+            }
+            KeyCode::Down => {
+                if let Some(p) = &mut self.drive_list_popup {
+                    if p.selected + 1 < len { p.selected += 1; }
+                }
+            }
+            KeyCode::Enter => { self.navigate_to_drive(); }
+            _ => {}
+        }
+    }
+
+    fn navigate_to_drive(&mut self) {
+        let (root, panel_side) = match self.drive_list_popup.take() {
+            Some(p) => {
+                let root = p.drives.into_iter().nth(p.selected).map(|d| d.root);
+                (root, p.panel)
+            }
+            None => return,
+        };
+        if let Some(root) = root {
+            let panel = match panel_side {
+                PanelSide::Left  => &mut self.left_panel,
+                PanelSide::Right => &mut self.right_panel,
+            };
+            panel.tab_mut().path = PathBuf::from(&root);
+            panel.tab_mut().selected = 0;
+            panel.tab_mut().scroll = 0;
+            let _ = panel.load_entries();
+            panel.record_visit();
+        }
+    }
+
     fn open_context_menu(&mut self, x: u16, y: u16) {
         self.show_menu = false;
         self.submenu_open = false;
@@ -2806,6 +2889,92 @@ pub fn build_display_lines(lines: &[String], wrap: bool, width: usize) -> Vec<(u
         out.push((0, true, String::new()));
     }
     out
+}
+
+fn list_drives() -> Vec<DriveEntry> {
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn GetLogicalDrives() -> u32;
+            fn GetVolumeInformationW(
+                lpRootPathName:        *const u16,
+                lpVolumeNameBuffer:    *mut u16,
+                nVolumeNameSize:       u32,
+                lpVolumeSerialNumber:  *mut u32,
+                lpMaxComponentLength:  *mut u32,
+                lpFileSystemFlags:     *mut u32,
+                lpFileSystemNameBuffer: *mut u16,
+                nFileSystemNameSize:   u32,
+            ) -> i32;
+        }
+
+        fn volume_label(root: &str) -> String {
+            use std::os::windows::ffi::OsStrExt;
+            let wide: Vec<u16> = std::ffi::OsStr::new(root)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let mut buf = vec![0u16; 256];
+            let ok = unsafe {
+                GetVolumeInformationW(
+                    wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32,
+                    std::ptr::null_mut(), std::ptr::null_mut(),
+                    std::ptr::null_mut(), std::ptr::null_mut(), 0,
+                )
+            };
+            if ok != 0 {
+                let end = buf.iter().position(|&c| c == 0).unwrap_or(0);
+                String::from_utf16_lossy(&buf[..end]).to_string()
+            } else {
+                String::new()
+            }
+        }
+
+        let mask = unsafe { GetLogicalDrives() };
+        (0..26u32)
+            .filter(|i| mask & (1 << i) != 0)
+            .map(|i| {
+                let letter = (b'A' + i as u8) as char;
+                let root   = format!("{}:\\", letter);
+                let label  = volume_label(&root);
+                DriveEntry { root, label }
+            })
+            .collect()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut drives = vec![DriveEntry { root: "/".to_string(), label: "Macintosh HD".to_string() }];
+        if let Ok(entries) = std::fs::read_dir("/Volumes") {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let root = format!("/Volumes/{}", name);
+                drives.push(DriveEntry { root, label: name });
+            }
+        }
+        drives
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        // Linux: parse /proc/mounts, skip virtual filesystems
+        const SKIP: &[&str] = &[
+            "proc", "sysfs", "devtmpfs", "tmpfs", "devpts", "cgroup", "cgroup2",
+            "pstore", "bpf", "tracefs", "debugfs", "securityfs", "configfs",
+            "fusectl", "hugetlbfs", "mqueue", "sunrpc", "efivarfs", "autofs",
+            "squashfs", "overlay", "nsfs",
+        ];
+        let content = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
+        content
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split_whitespace();
+                let _device = parts.next()?;
+                let mount   = parts.next()?;
+                let fstype  = parts.next()?;
+                if SKIP.contains(&fstype) { return None; }
+                Some(DriveEntry { root: mount.replace("\\040", " "), label: String::new() })
+            })
+            .collect()
+    }
 }
 
 fn reveal_in_file_manager_label() -> String {

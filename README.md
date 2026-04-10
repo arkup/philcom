@@ -83,26 +83,6 @@ philcom -h                              # show help
 | `F9` | Bookmarks — open bookmark list |
 | `Ctrl+D` | Bookmark current directory |
 
-### Editor (F4)
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+S` | Save |
-| `Ctrl+C` | Copy current line |
-| `Ctrl+X` | Cut current line |
-| `Ctrl+V` | Paste |
-| `Esc` / `F4` | Close (prompts if unsaved) |
-
-### File Viewer (F3)
-
-| Key | Action |
-|-----|--------|
-| `↑` / `↓` / `k` / `j` | Scroll one line |
-| `PgUp` / `PgDn` | Scroll 20 lines |
-| `w` | Toggle line wrap |
-| `c` | Copy selected text to clipboard |
-| `Esc` / `F3` / `q` | Close viewer |
-
 ### Command Line
 
 | Input | Action |
@@ -129,6 +109,8 @@ Tabs can also be managed via the **Left / Right** panel menu. Click a tab label 
 | Key | Action |
 |-----|--------|
 | `F2` | Toggle menu bar |
+| `Alt+F1` | Drive / mount list for left panel |
+| `Alt+F2` | Drive / mount list for right panel |
 | `Ctrl+O` | Spawn interactive shell (`exit` or `Ctrl+D` to return) |
 | `Alt+H` | Directory history popup |
 | `Alt+L` | Operation log popup |
