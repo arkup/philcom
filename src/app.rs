@@ -1188,7 +1188,7 @@ impl App {
         match key {
             KeyCode::Esc => self.panel_submenu_open = false,
             KeyCode::Up   => { if self.panel_submenu_index > 0 { self.panel_submenu_index -= 1; } }
-            KeyCode::Down => { if self.panel_submenu_index < 6 { self.panel_submenu_index += 1; } }
+            KeyCode::Down => { if self.panel_submenu_index < 7 { self.panel_submenu_index += 1; } }
             KeyCode::Enter => {
                 let idx = self.panel_submenu_index;
                 self.panel_submenu_open = false;
@@ -1227,6 +1227,8 @@ impl App {
                 PanelSide::Left  => self.left_panel.close_tab(),
                 PanelSide::Right => self.right_panel.close_tab(),
             }
+        } else if idx == 7 {
+            self.open_drive_list_popup(self.panel_submenu_side.clone());
         }
     }
 
@@ -1473,6 +1475,22 @@ impl App {
                     }
                     return;
                 }
+                // Drive list popup
+                if self.drive_list_popup.is_some() {
+                    let rect = self.drive_list_popup.as_ref().unwrap().rect;
+                    if rect_contains(rect, col, row) {
+                        let item_row = row.saturating_sub(rect.y + 1) as usize;
+                        let len = self.drive_list_popup.as_ref().unwrap().drives.len();
+                        if item_row < len {
+                            let is_double = self.is_double_click(col, row);
+                            if let Some(p) = &mut self.drive_list_popup { p.selected = item_row; }
+                            if is_double { self.navigate_to_drive(); }
+                        }
+                    } else {
+                        self.drive_list_popup = None;
+                    }
+                    return;
+                }
                 // File submenu
                 if self.file_submenu_open {
                     if rect_contains(self.file_submenu_rect, col, row) {
@@ -1500,11 +1518,15 @@ impl App {
                 if self.panel_submenu_open {
                     if rect_contains(self.panel_submenu_rect, col, row) {
                         let item_row = row.saturating_sub(self.panel_submenu_rect.y + 1) as usize;
-                        self.panel_submenu_open = false;
-                        self.show_menu = false;
-                        // display row 5 is separator; rows 6+ map to logical idx = row - 1
-                        let logical = if item_row >= 6 { item_row - 1 } else { item_row };
-                        self.execute_panel_submenu_action(logical);
+                        // separators at display rows 5 and 8 — ignore clicks on them
+                        if item_row == 5 || item_row == 8 { return; }
+                        // separators at display rows 5 and 8; adjust logical index accordingly
+                        let logical = if item_row >= 9 { item_row - 2 } else if item_row >= 6 { item_row - 1 } else { item_row };
+                        if logical <= 7 {
+                            self.panel_submenu_open = false;
+                            self.show_menu = false;
+                            self.execute_panel_submenu_action(logical);
+                        }
                     } else {
                         self.panel_submenu_open = false;
                         self.show_menu = false;
@@ -1651,6 +1673,8 @@ impl App {
                 } else if let Some(sr) = &mut self.search_results {
                     let len = sr.results.len();
                     if sr.selected + 1 < len { sr.selected += 1; }
+                } else if let Some(p) = &mut self.drive_list_popup {
+                    if p.selected + 1 < p.drives.len() { p.selected += 1; }
                 } else {
                     self.active_panel_mut().move_down();
                 }
@@ -1663,8 +1687,22 @@ impl App {
                 } else if let Some(sr) = &mut self.search_results {
                     if sr.selected > 0 { sr.selected -= 1; }
                     if sr.selected < sr.scroll { sr.scroll = sr.selected; }
+                } else if let Some(p) = &mut self.drive_list_popup {
+                    if p.selected > 0 { p.selected -= 1; }
                 } else {
                     self.active_panel_mut().move_up();
+                }
+            }
+            MouseEventKind::Moved => {
+                if let Some(p) = &self.drive_list_popup {
+                    let rect = p.rect;
+                    if rect_contains(rect, col, row) {
+                        let item_row = row.saturating_sub(rect.y + 1) as usize;
+                        let len = self.drive_list_popup.as_ref().unwrap().drives.len();
+                        if item_row < len {
+                            if let Some(p) = &mut self.drive_list_popup { p.selected = item_row; }
+                        }
+                    }
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
@@ -2512,11 +2550,7 @@ impl App {
                 PanelSide::Left  => &mut self.left_panel,
                 PanelSide::Right => &mut self.right_panel,
             };
-            panel.tab_mut().path = PathBuf::from(&root);
-            panel.tab_mut().selected = 0;
-            panel.tab_mut().scroll = 0;
-            let _ = panel.load_entries();
-            panel.record_visit();
+            panel.navigate_to(PathBuf::from(&root));
         }
     }
 

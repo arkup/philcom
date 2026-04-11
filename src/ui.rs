@@ -1209,12 +1209,12 @@ fn render_panel_submenu(f: &mut Frame, app: &mut App, theme: &Theme) {
     use crate::app::PanelSide;
 
     const FILTER_ITEMS: &[&str] = &["All files", "Executables only"];
-    const ALL_ITEMS: &[&str]    = &["All files", "Executables only", "+ New file", "  History", "  Downloads", "+ New tab", "x Close tab"];
+    const ALL_ITEMS: &[&str]    = &["All files", "Executables only", "+ New file", "  History", "  Downloads", "+ New tab", "x Close tab", "  Switch drive"];
 
     let menu_idx = if app.panel_submenu_side == PanelSide::Left { 0 } else { 2 };
     let x = app.menu_item_rects.get(menu_idx).map(|r| r.x).unwrap_or(0);
     let width: u16 = 22;
-    let height: u16 = ALL_ITEMS.len() as u16 + 1 + 2; // +1 for separator
+    let height: u16 = ALL_ITEMS.len() as u16 + 2 + 2; // +2 for separators
 
     let area = Rect::new(x, 1, width, height);
     app.panel_submenu_rect = area;
@@ -1232,6 +1232,7 @@ fn render_panel_submenu(f: &mut Frame, app: &mut App, theme: &Theme) {
     let mut items: Vec<ListItem> = Vec::new();
     for (i, &name) in ALL_ITEMS.iter().enumerate() {
         if i == 5 { items.push(sep.clone()); } // separator before tab items
+        if i == 7 { items.push(sep.clone()); } // separator before Switch drive
         let is_cursor = i == app.panel_submenu_index;
         let is_active = i < FILTER_ITEMS.len() && (i == 1) == active_exec;
         let label = if is_active { format!(" \u{2022} {}", name) } else { format!("   {}", name) };
