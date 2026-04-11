@@ -1430,8 +1430,9 @@ impl App {
                         let idx = scroll + inner_row;
                         let len = self.history_popup.as_ref().unwrap().entries.len();
                         if idx < len {
+                            let is_double = self.is_double_click(col, row);
                             if let Some(p) = &mut self.history_popup { p.selected = idx; }
-                            self.navigate_to_history();
+                            if is_double { self.navigate_to_history(); }
                         }
                     } else {
                         self.history_popup = None;
@@ -1675,6 +1676,9 @@ impl App {
                     if sr.selected + 1 < len { sr.selected += 1; }
                 } else if let Some(p) = &mut self.drive_list_popup {
                     if p.selected + 1 < p.drives.len() { p.selected += 1; }
+                } else if let Some(p) = &mut self.history_popup {
+                    let len = p.entries.len();
+                    if p.selected + 1 < len { p.selected += 1; }
                 } else {
                     self.active_panel_mut().move_down();
                 }
@@ -1689,6 +1693,9 @@ impl App {
                     if sr.selected < sr.scroll { sr.scroll = sr.selected; }
                 } else if let Some(p) = &mut self.drive_list_popup {
                     if p.selected > 0 { p.selected -= 1; }
+                } else if let Some(p) = &mut self.history_popup {
+                    if p.selected > 0 { p.selected -= 1; }
+                    if p.selected < p.scroll { p.scroll = p.selected; }
                 } else {
                     self.active_panel_mut().move_up();
                 }
@@ -1701,6 +1708,17 @@ impl App {
                         let len = self.drive_list_popup.as_ref().unwrap().drives.len();
                         if item_row < len {
                             if let Some(p) = &mut self.drive_list_popup { p.selected = item_row; }
+                        }
+                    }
+                } else if let Some(p) = &self.history_popup {
+                    let rect = p.rect;
+                    if rect_contains(rect, col, row) {
+                        let scroll = p.scroll;
+                        let len = p.entries.len();
+                        let item_row = row.saturating_sub(rect.y + 1) as usize;
+                        let idx = scroll + item_row;
+                        if idx < len {
+                            if let Some(p) = &mut self.history_popup { p.selected = idx; }
                         }
                     }
                 }
@@ -2404,11 +2422,7 @@ impl App {
                 PanelSide::Left  => &mut self.left_panel,
                 PanelSide::Right => &mut self.right_panel,
             };
-            panel.tab_mut().path = path;
-            panel.tab_mut().selected = 0;
-            panel.tab_mut().scroll = 0;
-            let _ = panel.load_entries();
-            panel.record_visit();
+            panel.navigate_to(path);
         }
     }
 
